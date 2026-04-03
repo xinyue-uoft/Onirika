@@ -1,0 +1,48 @@
+# Onirika SSH MCP Server Configuration
+# Copy this to ~/.config/onirika/config.yaml and customize.
+
+# Default host to use when no host parameter is specified in tool calls.
+default_host: myserver
+
+hosts:
+  myserver:
+    # SSH hostname or alias (must be reachable via `ssh <ssh_host>`)
+    ssh_host: myserver.example.com
+
+    # SSH username (optional — uses system default if omitted)
+    user: jdoe
+
+    # SSH port (optional, default: 22)
+    # port: 22
+
+    # Path to the SSH ControlMaster socket.
+    # Supports SSH tokens: %r (remote user), %h (host), %p (port).
+    # Must match what you use when establishing the master connection.
+    control_path: "~/.ssh/ctrl-%r@%h:%p"
+
+    # Shell commands to source before every remote command.
+    # Use this to set up your development environment.
+    preamble: |
+      source ~/project/env.sh
+
+    # Default working directory for commands (when cwd is not specified).
+    default_cwd: "~/project"
+
+    # Timeout for regular commands in seconds (default: 30).
+    command_timeout: 30
+
+    # Timeout for file operations in seconds (default: 60).
+    file_timeout: 60
+
+    # Maximum file size in bytes for read/write operations (default: 10MB).
+    max_file_size: 10485760
+
+    # Maximum output lines for command output (default: 5000).
+    max_output_lines: 5000
+
+  # You can configure multiple hosts:
+  # staging:
+  #   ssh_host: staging.example.com
+  #   user: deploy
+  #   control_path: "~/.ssh/ctrl-%r@%h:%p"
+  #   default_cwd: "/opt/app"

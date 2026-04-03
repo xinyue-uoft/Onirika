@@ -1,0 +1,30 @@
+[project]
+name = "onirika-ssh"
+version = "0.1.0"
+description = "MCP server for remote SSH file and command operations via ControlMaster"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+onirika-ssh = "onirika.__main__:main"
+onirika-setup = "onirika.setup:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["onirika"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
