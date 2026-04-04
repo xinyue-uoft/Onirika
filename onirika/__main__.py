@@ -1,7 +1,6 @@
 """Entry point for onirika-ssh MCP server."""
 
 import argparse
-import sys
 
 from onirika.server import mcp
 

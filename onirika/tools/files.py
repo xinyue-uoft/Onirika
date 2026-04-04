@@ -148,17 +148,18 @@ async def ssh_list_dir(
     max_entries = int(max_entries)
 
     if recursive:
+        # Use -exec ls instead of -printf for BSD/macOS compatibility
         cmd = (
             f"find {safe_path} -name {safe_pattern} "
-            f"-maxdepth 10 -printf '%y %s %T@ %p\\n' 2>/dev/null | "
+            f"-maxdepth 10 -exec ls -ld {{}} + 2>/dev/null | "
             f"head -n {max_entries + 1}"
         )
     else:
         # Use find instead of ls glob to avoid shell expansion of pattern
         if pattern == "*":
-            cmd = f"ls -la --time-style=long-iso {safe_path} 2>/dev/null | head -n {max_entries + 2}"
+            cmd = f"ls -la {safe_path} 2>/dev/null | head -n {max_entries + 2}"
         else:
-            cmd = f"find {safe_path} -maxdepth 1 -name {safe_pattern} -exec ls -ld --time-style=long-iso {{}} + 2>/dev/null | head -n {max_entries + 1}"
+            cmd = f"find {safe_path} -maxdepth 1 -name {safe_pattern} -exec ls -ld {{}} + 2>/dev/null | head -n {max_entries + 1}"
 
     result = await executor.run(cmd, cwd="~")
 
@@ -168,16 +169,12 @@ async def ssh_list_dir(
     lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
 
     if recursive:
+        # ls -ld output: just pass through the lines
         entries = []
         for line in lines[:max_entries]:
-            parts = line.split(" ", 3)
-            if len(parts) >= 4:
-                ftype = "dir" if parts[0] == "d" else "file"
-                entries.append({
-                    "name": parts[3],
-                    "type": ftype,
-                    "size": int(parts[1]) if parts[1].isdigit() else 0,
-                })
+            if line.startswith("total "):
+                continue
+            entries.append(line)
         truncated = len(lines) > max_entries
     else:
         # ls -la output: skip the "total N" line
@@ -359,7 +356,10 @@ async def ssh_download(
     local_dir: str = "",
     host: str | None = None,
 ) -> dict:
-    """Download a file from the remote server to the local machine.
+    """Download a text file from the remote server to the local machine.
+
+    Note: This transfers content as UTF-8 text. Binary files may be corrupted.
+    For binary files, use ssh_run with scp or base64 encoding instead.
 
     Args:
         remote_path: Path to the file on the remote server.
@@ -399,4 +399,161 @@ async def ssh_download(
         "success": True,
         "local_path": local_path,
         "size": len(content_bytes),
+    }
+
+
+@mcp.tool()
+async def ssh_append_file(
+    path: str,
+    content: str,
+    host: str | None = None,
+) -> dict:
+    """Append text to the end of a file on the remote server.
+
+    Efficient for adding content to large files — no read round-trip needed.
+    The file is created if it does not exist.
+
+    Args:
+        path: Path to the file on the remote.
+        content: Text content to append.
+        host: SSH host alias from config. Uses default if omitted.
+    """
+    executor = await require_connection(host)
+    safe_path = shlex.quote(path)
+    content_bytes = content.encode("utf-8")
+
+    result = await executor.run(
+        f"cat >> {safe_path}",
+        cwd="~",
+        timeout=executor.config.file_timeout,
+        input_data=content_bytes,
+    )
+
+    if result.exit_code != 0:
+        return {"error": "append_failed", "message": result.stderr.strip()}
+
+    return {"success": True, "bytes_appended": len(content_bytes), "path": path}
+
+
+@mcp.tool()
+async def ssh_insert_lines(
+    path: str,
+    after_line: int,
+    content: str,
+    host: str | None = None,
+) -> dict:
+    """Insert text after a specific line number in a file on the remote server.
+
+    Operates directly via sed on the remote — no full-file transfer needed.
+    Only the new content is sent over the wire.
+
+    Args:
+        path: Path to the file on the remote.
+        after_line: Line number to insert after (1-based). Use 0 to insert at the beginning.
+        content: Text content to insert.
+        host: SSH host alias from config. Uses default if omitted.
+    """
+    executor = await require_connection(host)
+    after_line = int(after_line)
+    safe_path = shlex.quote(path)
+    content_bytes = content.encode("utf-8")
+
+    if after_line == 0:
+        # Insert at the beginning: write content to temp, then prepend
+        script = (
+            f"_tmp=$(mktemp) && cat > \"$_tmp\" && "
+            f"_orig=$(mktemp) && cp {safe_path} \"$_orig\" && "
+            f"cat \"$_tmp\" \"$_orig\" > {safe_path} && "
+            f"rm -f \"$_tmp\" \"$_orig\""
+        )
+    else:
+        # Insert after a specific line: write content to temp, use sed 'r' + mv (portable)
+        script = (
+            f"_tmp=$(mktemp) && _out=$(mktemp) && cat > \"$_tmp\" && "
+            f"sed '{after_line}r '\"$_tmp\" {safe_path} > \"$_out\" && "
+            f"mv \"$_out\" {safe_path} && "
+            f"rm -f \"$_tmp\""
+        )
+
+    result = await executor.run(
+        script, cwd="~", timeout=executor.config.file_timeout, input_data=content_bytes,
+    )
+
+    if result.exit_code != 0:
+        return {"error": "insert_failed", "message": result.stderr.strip()}
+
+    return {"success": True, "after_line": after_line, "path": path}
+
+
+@mcp.tool()
+async def ssh_replace_lines(
+    path: str,
+    start_line: int,
+    end_line: int,
+    content: str = "",
+    host: str | None = None,
+) -> dict:
+    """Replace a range of lines in a file on the remote server.
+
+    Operates directly via sed on the remote — no full-file transfer needed.
+    If content is empty, the lines are deleted. Both start_line and end_line
+    are 1-based and inclusive.
+
+    Args:
+        path: Path to the file on the remote.
+        start_line: First line to replace (1-based, inclusive).
+        end_line: Last line to replace (1-based, inclusive).
+        content: Replacement text. Empty string deletes the line range.
+        host: SSH host alias from config. Uses default if omitted.
+    """
+    executor = await require_connection(host)
+    start_line = int(start_line)
+    end_line = int(end_line)
+    safe_path = shlex.quote(path)
+
+    if start_line < 1 or end_line < start_line:
+        return {
+            "error": "invalid_range",
+            "message": f"Invalid line range: {start_line}-{end_line}. start_line must be >= 1 and <= end_line.",
+        }
+
+    if not content:
+        # Just delete the range — use sed > tmp + mv for portability (no sed -i)
+        script = (
+            f"_out=$(mktemp) && "
+            f"sed '{start_line},{end_line}d' {safe_path} > \"$_out\" && "
+            f"mv \"$_out\" {safe_path}"
+        )
+        result = await executor.run(script, cwd="~", timeout=executor.config.file_timeout)
+    else:
+        # Delete range, then insert replacement after (start_line - 1)
+        content_bytes = content.encode("utf-8")
+        insert_after = start_line - 1
+        if insert_after == 0:
+            # Replacing from line 1: delete range, prepend content
+            script = (
+                f"_tmp=$(mktemp) && _out=$(mktemp) && cat > \"$_tmp\" && "
+                f"sed '{start_line},{end_line}d' {safe_path} > \"$_out\" && "
+                f"cat \"$_tmp\" \"$_out\" > {safe_path} && "
+                f"rm -f \"$_tmp\" \"$_out\""
+            )
+        else:
+            script = (
+                f"_tmp=$(mktemp) && _out=$(mktemp) && _out2=$(mktemp) && cat > \"$_tmp\" && "
+                f"sed '{start_line},{end_line}d' {safe_path} > \"$_out\" && "
+                f"sed '{insert_after}r '\"$_tmp\" \"$_out\" > \"$_out2\" && "
+                f"mv \"$_out2\" {safe_path} && "
+                f"rm -f \"$_tmp\" \"$_out\""
+            )
+        result = await executor.run(
+            script, cwd="~", timeout=executor.config.file_timeout, input_data=content_bytes,
+        )
+
+    if result.exit_code != 0:
+        return {"error": "replace_failed", "message": result.stderr.strip()}
+
+    return {
+        "success": True,
+        "replaced": f"lines {start_line}-{end_line}",
+        "path": path,
     }

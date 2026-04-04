@@ -8,6 +8,9 @@ from onirika.tools.files import (
     ssh_read_file,
     ssh_write_file,
     ssh_patch_file,
+    ssh_append_file,
+    ssh_insert_lines,
+    ssh_replace_lines,
 )
 
 
@@ -105,3 +108,81 @@ class TestPatchFile:
         )
         result = await ssh_patch_file("/tmp/test.txt", "aaa", "bbb")
         assert result["error"] == "ambiguous"
+
+
+@pytest.mark.asyncio
+class TestAppendFile:
+    async def test_append_success(self, mock_require):
+        executor = mock_require
+        result = await ssh_append_file("/tmp/test.txt", "new line\n")
+        assert result["success"] is True
+        assert result["bytes_appended"] == 9
+        # Verify run was called with cat >> and input_data
+        call_args = executor.run.call_args
+        assert ">>" in call_args[0][0]
+        assert call_args[1]["input_data"] == b"new line\n"
+
+    async def test_append_failure(self, mock_require):
+        executor = mock_require
+        executor.run.return_value = SSHResult(stdout="", stderr="Permission denied", exit_code=1)
+        result = await ssh_append_file("/tmp/test.txt", "data")
+        assert result["error"] == "append_failed"
+
+
+@pytest.mark.asyncio
+class TestInsertLines:
+    async def test_insert_after_line(self, mock_require):
+        executor = mock_require
+        result = await ssh_insert_lines("/tmp/test.txt", after_line=5, content="inserted\n")
+        assert result["success"] is True
+        assert result["after_line"] == 5
+        call_args = executor.run.call_args
+        assert "5r" in call_args[0][0]
+        assert call_args[1]["input_data"] == b"inserted\n"
+
+    async def test_insert_at_beginning(self, mock_require):
+        executor = mock_require
+        result = await ssh_insert_lines("/tmp/test.txt", after_line=0, content="first\n")
+        assert result["success"] is True
+        assert result["after_line"] == 0
+        # Should use cat prepend approach, not sed 'r'
+        call_args = executor.run.call_args
+        assert "cat" in call_args[0][0]
+
+    async def test_insert_failure(self, mock_require):
+        executor = mock_require
+        executor.run.return_value = SSHResult(stdout="", stderr="No such file", exit_code=1)
+        result = await ssh_insert_lines("/tmp/missing.txt", after_line=1, content="data")
+        assert result["error"] == "insert_failed"
+
+
+@pytest.mark.asyncio
+class TestReplaceLines:
+    async def test_replace_range(self, mock_require):
+        executor = mock_require
+        result = await ssh_replace_lines("/tmp/test.txt", start_line=3, end_line=5, content="new\n")
+        assert result["success"] is True
+        assert result["replaced"] == "lines 3-5"
+        call_args = executor.run.call_args
+        assert "3,5d" in call_args[0][0]
+
+    async def test_replace_empty_deletes(self, mock_require):
+        executor = mock_require
+        result = await ssh_replace_lines("/tmp/test.txt", start_line=2, end_line=4, content="")
+        assert result["success"] is True
+        call_args = executor.run.call_args
+        assert "2,4d" in call_args[0][0]
+        # No input_data for delete-only
+        assert "input_data" not in call_args[1] or call_args[1].get("input_data") is None
+
+    async def test_replace_invalid_range(self, mock_require):
+        result = await ssh_replace_lines("/tmp/test.txt", start_line=5, end_line=3)
+        assert result["error"] == "invalid_range"
+
+    async def test_replace_from_line_one(self, mock_require):
+        executor = mock_require
+        result = await ssh_replace_lines("/tmp/test.txt", start_line=1, end_line=2, content="replaced\n")
+        assert result["success"] is True
+        # Should use the prepend approach since inserting at line 0
+        call_args = executor.run.call_args
+        assert "1,2d" in call_args[0][0]

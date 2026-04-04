@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onirika</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+    <div id="app">
+        <div id="toolbar">
+            <span class="title">Onirika</span>
+            <span class="status" id="ssh-status">SSH: connecting...</span>
+            <span class="status" id="claude-status">Claude: connecting...</span>
+        </div>
+        <div id="panels">
+            <div id="panel-ssh" class="panel">
+                <div class="panel-header">SSH Master</div>
+                <div class="terminal-container" id="term-ssh"></div>
+            </div>
+            <div id="resizer" class="resizer"></div>
+            <div id="panel-claude" class="panel">
+                <div class="panel-header">Claude Code</div>
+                <div class="terminal-container" id="term-claude"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

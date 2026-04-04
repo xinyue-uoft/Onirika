@@ -69,7 +69,9 @@ class ServerConfig:
 
 
 def _default_config_path() -> Path:
-    return Path.home() / ".config" / "onirika" / "config.yaml"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "onirika" / "config.yaml"
 
 
 def load_config(path: str | Path | None = None) -> ServerConfig:
