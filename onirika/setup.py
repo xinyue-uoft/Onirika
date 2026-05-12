@@ -506,18 +506,58 @@ Host {alias}
     return True
 
 
+def _resolve_mcp_command() -> tuple[list[str], str]:
+    """Pick the fastest-starting invocation for the MCP server.
+
+    Returns (argv, label). The first element of argv is an absolute path so
+    Claude Code does not depend on its own PATH at spawn time. We avoid
+    `uv run` because dependency resolution on cold start can exceed Claude
+    Code's MCP handshake window, manifesting as "Failed to connect" even
+    though the server itself is healthy.
+    """
+    # 1. Globally installed entry point (uv tool install / pipx).
+    on_path = _check_binary("onirika-ssh")
+    venv_script = PROJECT_DIR / ".venv" / "bin" / "onirika-ssh"
+    if on_path and Path(on_path).resolve() != venv_script.resolve():
+        return [on_path], f"global install ({on_path})"
+
+    # 2. Project venv entry point — fine for dev, still skips uv resolution.
+    if venv_script.exists():
+        return [str(venv_script)], f"dev venv ({venv_script})"
+
+    # 3. Last resort — uv run. Slowest cold start; may time out.
+    if _check_binary("uv"):
+        return (
+            ["uv", "--directory", str(PROJECT_DIR), "run", "onirika-ssh"],
+            "uv run (slow cold start — install with `uv tool install .` for best results)",
+        )
+
+    raise RuntimeError(
+        "Cannot locate onirika-ssh. Run `uv tool install .` from the repo "
+        "or `uv sync` to create a project venv."
+    )
+
+
 def step_register_mcp() -> bool:
     _step(5, "Register MCP server with Claude Code")
 
     claude_path = _check_binary("claude")
+    try:
+        mcp_cmd, label = _resolve_mcp_command()
+    except RuntimeError as e:
+        console.print(f"  [red]✗[/] {e}")
+        return True
+
     if not claude_path:
         console.print("  [yellow]![/] Claude Code CLI not found.")
         console.print("  You can register manually later with:")
-        console.print(f"  [cyan]claude mcp add --scope user onirika-ssh -- "
-                      f"uv --directory {PROJECT_DIR} run onirika-ssh[/]")
+        console.print(
+            f"  [cyan]claude mcp add --scope user onirika-ssh -- {' '.join(mcp_cmd)}[/]"
+        )
         return True
 
-    # Check if already registered
+    console.print(f"  [dim]Will register: {label}[/]")
+
     rc, output = _run_quiet(["claude", "mcp", "list"])
     if rc == 0 and "onirika-ssh" in output:
         console.print("  [green]✓[/] onirika-ssh is already registered with Claude Code.")
@@ -530,25 +570,14 @@ def step_register_mcp() -> bool:
         console.print("  [dim]Skipped.[/]")
         return True
 
-    uv_path = _check_binary("uv")
-    if uv_path:
-        cmd = [
-            "claude", "mcp", "add",
-            "--transport", "stdio",
-            "--scope", "user",
-            "onirika-ssh",
-            "--",
-            "uv", "--directory", str(PROJECT_DIR), "run", "onirika-ssh",
-        ]
-    else:
-        cmd = [
-            "claude", "mcp", "add",
-            "--transport", "stdio",
-            "--scope", "user",
-            "onirika-ssh",
-            "--",
-            str(PROJECT_DIR / ".venv" / "bin" / "onirika-ssh"),
-        ]
+    cmd = [
+        "claude", "mcp", "add",
+        "--transport", "stdio",
+        "--scope", "user",
+        "onirika-ssh",
+        "--",
+        *mcp_cmd,
+    ]
 
     rc, output = _run_quiet(cmd, timeout=30)
     if rc == 0:
@@ -647,7 +676,6 @@ async def _smoke_test(executor: SSHExecutor) -> bool:
 def step_done(alias: str):
     _step(7, "Setup complete!")
 
-    launcher = PROJECT_DIR / "bin" / "onirika-launch"
     has_tmux = _check_binary("tmux") is not None
 
     table = Table(show_header=False, box=None, padding=(0, 2))
@@ -655,7 +683,7 @@ def step_done(alias: str):
     table.add_column()
 
     if has_tmux:
-        table.add_row("Launch:", f"[cyan]{launcher} {alias}[/]")
+        table.add_row("Launch:", f"[cyan]onirika launch {alias}[/]")
         table.add_row("", "[dim]Opens tmux with SSH + Claude Code side by side[/]")
         table.add_row("", "")
         table.add_row("Or manually:", "")

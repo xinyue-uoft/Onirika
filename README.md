@@ -45,35 +45,46 @@ An MCP (Model Context Protocol) server that gives Claude Code -- and any MCP-com
 
 ## Quick Start
 
-### Option A: Setup Wizard
-
 ```bash
 git clone https://github.com/xinyue-uoft/Onirika.git
 cd Onirika
-uv sync
-uv run onirika-setup
+uv tool install .
+onirika setup                     # configure host + register MCP with Claude Code
+onirika launch <host-alias>       # tmux + SSH master + Claude Code (needs tmux)
 ```
 
-The wizard walks through host configuration, SSH setup, MCP registration, and connection testing.
+`uv tool install .` installs the package into its own isolated environment and puts four commands on your PATH:
 
-### Option B: Manual Setup
+| Command | What it does |
+|---------|--------------|
+| `onirika` | Top-level dispatcher (`setup`, `ssh`, `launch`, `web`) |
+| `onirika-ssh` | MCP server entry point (what Claude Code spawns) |
+| `onirika-setup` | Same wizard as `onirika setup` |
+| `onirika-web` | Same web UI as `onirika web` |
 
-**1. Create config**
+Reinstall after pulling updates: `uv tool install --reinstall .`. Uninstall: `uv tool uninstall onirika-ssh`. For an editable install that tracks your working tree: `uv tool install --editable .`.
+
+`onirika launch` requires `tmux` and runs only on macOS/Linux. Everything else (the MCP server, setup wizard, web UI) is pure Python and works on Windows too.
+
+### Manual MCP registration
+
+The wizard registers `onirika-ssh` automatically. If you want to do it yourself:
+
+```bash
+claude mcp add --scope user onirika-ssh -- onirika-ssh
+```
+
+Do **not** register `uv run onirika-ssh` — the dependency resolution on cold start can exceed Claude Code's MCP handshake timeout and surface as `Failed to connect` even when the server is healthy. The bare `onirika-ssh` command (provided by `uv tool install`) starts in milliseconds.
+
+### Configure without the wizard
 
 ```bash
 mkdir -p ~/.config/onirika
 cp config.example.yaml ~/.config/onirika/config.yaml
-# Edit with your server details
+# Edit with your server details, then register MCP as shown above.
 ```
 
-**2. Register with Claude Code**
-
-```bash
-claude mcp add --scope user onirika-ssh \
-  -- uv --directory /path/to/Onirika run onirika-ssh
-```
-
-**3. Authenticate**
+### Authenticate and start Claude Code
 
 ```bash
 # Get Kerberos ticket (if applicable)
@@ -81,20 +92,17 @@ kinit
 
 # Open SSH master connection (handles 2FA)
 ssh -M -S ~/.ssh/ctrl-%r@%h:%p user@server
-```
 
-**4. Use Claude Code**
-
-```bash
+# In another terminal:
 claude
 ```
 
 Then ask: "List the files in ~/project on the remote server" or "Run make test on the remote".
 
-**5. Or use the tmux launcher** (does steps 3-4 together)
+Or do all of the above in one shot with the tmux launcher:
 
 ```bash
-./bin/onirika-launch myserver
+onirika launch myserver
 ```
 
 ## Tool Reference
@@ -191,13 +199,13 @@ The tmux launcher opens two panes side by side:
 - **Right pane**: Waits for connection, then starts Claude Code
 
 ```bash
-./bin/onirika-launch <host-alias>
+onirika launch <host-alias>
 
 # Clean up stale sessions and temp files
-./bin/onirika-launch --clean <host-alias>
+onirika launch --clean <host-alias>
 ```
 
-Click on a pane to switch focus (mouse mode is enabled).
+Click on a pane to switch focus (mouse mode is enabled). The launcher requires `tmux` (macOS/Linux only).
 
 ## Authentication Model
 
@@ -227,7 +235,12 @@ uv run python tests/integration_test.py [host-alias]
 
 # Test MCP server starts correctly
 echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}' | uv run onirika-ssh
+
+# Run any subcommand from the source tree
+uv run onirika launch <host>
 ```
+
+For an editable global install that tracks your working tree, use `uv tool install --editable .`. `onirika setup` detects whether you have a global install, a project venv, or only `uv run` and registers the right MCP command accordingly.
 
 ### Adding a New Tool
 

@@ -17,12 +17,14 @@ dev = [
 ]
 
 [project.scripts]
+onirika = "onirika.cli:main"
 onirika-ssh = "onirika.__main__:main"
 onirika-setup = "onirika.setup:main"
 onirika-web = "onirika.web.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["onirika"]
+artifacts = ["onirika/scripts/*.sh"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

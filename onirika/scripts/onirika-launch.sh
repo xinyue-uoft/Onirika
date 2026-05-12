@@ -28,19 +28,21 @@ if [ -z "$HOST_ALIAS" ]; then
 fi
 
 SESSION_NAME="onirika-${HOST_ALIAS}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Pick the Python that has pyyaml. Caller (onirika.cli) sets ONIRIKA_PYTHON
+# to its own interpreter; fall back to system python3 for direct invocation.
+PY="${ONIRIKA_PYTHON:-python3}"
 
 # Read config
 CONFIG_FILE="${ONIRIKA_CONFIG:-$HOME/.config/onirika/config.yaml}"
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "Error: Config file not found: $CONFIG_FILE"
-    echo "Run 'uv run onirika-setup' first, or create the config manually."
+    echo "Run 'onirika setup' first, or create the config manually."
     exit 1
 fi
 
 # Extract SSH target and control path from config (pass vars as args, not interpolated)
-read -r SSH_HOST SSH_TARGET CONTROL_PATH <<< "$(python3 - "$CONFIG_FILE" "$HOST_ALIAS" << 'PYEOF'
+read -r SSH_HOST SSH_TARGET CONTROL_PATH <<< "$("$PY" - "$CONFIG_FILE" "$HOST_ALIAS" << 'PYEOF'
 import yaml, os, sys
 config_file, host_alias = sys.argv[1], sys.argv[2]
 with open(config_file) as f:
