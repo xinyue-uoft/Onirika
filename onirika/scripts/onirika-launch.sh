@@ -1,29 +1,41 @@
 #!/usr/bin/env bash
-# Onirika launcher — opens a tmux session with SSH master + Claude Code side by side.
+# Onirika launcher — opens a tmux session with SSH master + AI agent side by side.
 #
 # Usage:
-#   onirika-launch <host-alias>
-#   onirika-launch myserver
+#   onirika-launch [--agent claude|opencode] [--clean] <host-alias>
+#
+# The right pane runs whichever agent is selected. Default is `claude`; pass
+# `--agent opencode` or set ONIRIKA_AGENT=opencode to switch.
 #
 # Left pane:  Interactive shell for kinit + SSH master connection.
-# Right pane: Claude Code (starts after you press Enter).
+# Right pane: AI agent (starts after SSH master is up).
 
 set -euo pipefail
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 CLEAN=false
 HOST_ALIAS=""
+AGENT="${ONIRIKA_AGENT:-claude}"
 
-for arg in "$@"; do
-    case "$arg" in
-        --clean) CLEAN=true ;;
-        -*)      echo "Unknown flag: $arg"; echo "Usage: onirika-launch [--clean] <host-alias>"; exit 1 ;;
-        *)       HOST_ALIAS="$arg" ;;
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --clean) CLEAN=true; shift ;;
+        --agent) AGENT="$2"; shift 2 ;;
+        --agent=*) AGENT="${1#--agent=}"; shift ;;
+        -*)      echo "Unknown flag: $1"; echo "Usage: onirika-launch [--agent claude|opencode] [--clean] <host-alias>"; exit 1 ;;
+        *)       HOST_ALIAS="$1"; shift ;;
     esac
 done
 
 if [ -z "$HOST_ALIAS" ]; then
-    echo "Usage: onirika-launch [--clean] <host-alias>"
+    echo "Usage: onirika-launch [--agent claude|opencode] [--clean] <host-alias>"
+    exit 1
+fi
+
+# Verify the chosen agent binary exists before doing all the tmux setup.
+if ! command -v "$AGENT" &>/dev/null; then
+    echo "Error: agent binary '$AGENT' not found on PATH."
+    echo "Install it first, or pick another with --agent."
     exit 1
 fi
 
@@ -124,12 +136,13 @@ done
 LEFTEOF
 chmod +x "$LEFT_SCRIPT"
 
-# Write helper for right pane — waits for connection before starting Claude
+# Write helper for right pane — waits for connection before starting the agent
 RIGHT_SCRIPT=$(mktemp /tmp/onirika-right.XXXXXXXX)
 cat > "$RIGHT_SCRIPT" << 'RIGHTEOF'
 #!/usr/bin/env bash
 SSH_TARGET="$1"
 CONTROL_PATH="$2"
+AGENT="$3"
 
 clear
 echo ""
@@ -141,17 +154,17 @@ echo ""
 for i in $(seq 1 120); do
     if ssh -O check -S "$CONTROL_PATH" "$SSH_TARGET" 2>/dev/null; then
         echo ""
-        echo "  ✓ SSH connection active! Starting Claude Code..."
+        echo "  ✓ SSH connection active! Starting $AGENT..."
         echo ""
         sleep 1
-        exec claude
+        exec "$AGENT"
     fi
     sleep 2
 done
 
 echo ""
 echo "  ✗ Timed out waiting for SSH connection (4 minutes)."
-echo "  Start Claude Code manually: claude"
+echo "  Start the agent manually: $AGENT"
 echo ""
 exec bash
 RIGHTEOF
@@ -163,9 +176,9 @@ tmux new-session -d -s "$SESSION_NAME" -n main
 # Left pane: interactive SSH setup
 tmux send-keys -t "$SESSION_NAME" "bash '$LEFT_SCRIPT' '$SSH_TARGET' '$SSH_HOST' '$CONTROL_PATH'; rm -f '$LEFT_SCRIPT'" Enter
 
-# Right pane: wait for connection, then start Claude
+# Right pane: wait for connection, then start the agent
 tmux split-window -h -t "$SESSION_NAME"
-tmux send-keys -t "$SESSION_NAME" "bash '$RIGHT_SCRIPT' '$SSH_TARGET' '$CONTROL_PATH'; rm -f '$RIGHT_SCRIPT'" Enter
+tmux send-keys -t "$SESSION_NAME" "bash '$RIGHT_SCRIPT' '$SSH_TARGET' '$CONTROL_PATH' '$AGENT'; rm -f '$RIGHT_SCRIPT'" Enter
 
 # Focus the left pane (user authenticates there first)
 tmux select-pane -t "$SESSION_NAME":0.0

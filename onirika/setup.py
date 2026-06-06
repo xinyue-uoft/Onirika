@@ -542,6 +542,7 @@ def step_register_mcp() -> bool:
     _step(5, "Register MCP server with Claude Code")
 
     claude_path = _check_binary("claude")
+    opencode_path = _check_binary("opencode")
     try:
         mcp_cmd, label = _resolve_mcp_command()
     except RuntimeError as e:
@@ -550,10 +551,16 @@ def step_register_mcp() -> bool:
 
     if not claude_path:
         console.print("  [yellow]![/] Claude Code CLI not found.")
-        console.print("  You can register manually later with:")
+        console.print("  Register manually later with:")
         console.print(
             f"  [cyan]claude mcp add --scope user onirika-ssh -- {' '.join(mcp_cmd)}[/]"
         )
+        if opencode_path:
+            console.print()
+            console.print("  [dim]opencode detected — add this to ~/.config/opencode/opencode.json:[/]")
+            console.print(
+                f'  [cyan]{{"mcp": {{"onirika-ssh": {{"type": "local", "command": {list(mcp_cmd)!r}}}}}}}[/]'
+            )
         return True
 
     console.print(f"  [dim]Will register: {label}[/]")
@@ -586,6 +593,13 @@ def step_register_mcp() -> bool:
         console.print(f"  [red]✗[/] Registration failed: {output}")
         console.print("  You can try manually:")
         console.print(f"  [cyan]{' '.join(cmd)}[/]")
+
+    if opencode_path:
+        console.print()
+        console.print("  [dim]opencode also detected — add this to ~/.config/opencode/opencode.json:[/]")
+        console.print(
+            f'  [cyan]{{"mcp": {{"onirika-ssh": {{"type": "local", "command": {list(mcp_cmd)!r}}}}}}}[/]'
+        )
 
     return True
 

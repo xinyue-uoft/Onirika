@@ -76,6 +76,32 @@ claude mcp add --scope user onirika-ssh -- onirika-ssh
 
 Do **not** register `uv run onirika-ssh` — the dependency resolution on cold start can exceed Claude Code's MCP handshake timeout and surface as `Failed to connect` even when the server is healthy. The bare `onirika-ssh` command (provided by `uv tool install`) starts in milliseconds.
 
+### Using with opencode
+
+`onirika-ssh` is a standard stdio MCP server, so it plugs into [opencode](https://opencode.ai) too. Add an entry to `~/.config/opencode/opencode.json` (or the project-local `opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "onirika-ssh": {
+      "type": "local",
+      "command": ["onirika-ssh"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Then launch with opencode as the right-pane agent:
+
+```bash
+onirika launch --agent opencode myserver
+# or set the default:
+export ONIRIKA_AGENT=opencode
+onirika launch myserver
+```
+
 ### Configure without the wizard
 
 ```bash
