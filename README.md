@@ -131,6 +131,68 @@ Or do all of the above in one shot with the tmux launcher:
 onirika launch myserver
 ```
 
+## Local SSH Gateway (for Claude Code's native SSH)
+
+Claude Code can connect to a remote machine over its built-in SSH support, but a
+direct connection trips over Kerberos / 2FA / `ProxyCommand` prompts — there
+is no TTY in which to complete them. The `onirika proxy` gateway sidesteps this:
+it exposes a stable, key-only SSH endpoint on `127.0.0.1:4242` (loopback only —
+never visible on the LAN) and bridges every channel to the real host through an
+already-established ControlMaster socket. The hard authentication is paid once,
+interactively; the gateway is a frictionless door behind it.
+
+```bash
+# Terminal A — open the master (Kerberos/2FA happens here), keep it alive:
+onirika establish myserver
+
+# Terminal B — start the gateway:
+onirika proxy myserver
+
+# ...or do both in one command (auth still interactive, master backgrounded):
+onirika proxy myserver --establish
+```
+
+This writes a fixed `onirika-local-host` alias into `~/.ssh/config`. In Claude
+Code's "Edit SSH connection" dialog, set the **SSH Host** to `onirika-local-host`
+— it connects with no Kerberos and no 2FA. The alias never changes; to point it
+at a different server, just re-run `onirika proxy <other-host>`.
+
+```bash
+onirika proxy status   # is the alias present / the port listening?
+onirika proxy stop      # remove the ssh-config alias (the master is left alone)
+```
+
+### Scoping a proxy / env to the agent only (`--source`)
+
+Some remote hosts can only reach the internet through a proxy that you enable by
+sourcing a script (e.g. an institutional `web_proxy.sh` that exports
+`HTTPS_PROXY`). You usually *don't* want to source it into your login shell —
+that would route everything (including local-service and internal tests) through
+the proxy. Instead, scope it to just the commands the gateway forwards:
+
+```bash
+onirika proxy myserver --establish --source ~admin/bin/web_proxy.sh
+```
+
+The gateway prepends `source <script>;` to every exec command it forwards, so the
+remote Claude Code server — and the agent children it spawns — inherit the proxy
+env, while your interactive shell and anything you run outside the gateway stay
+clean. Loopback (`127.0.0.1`/`localhost`/`::1`) is auto-added to `NO_PROXY`.
+`--source` is repeatable. Combine with the script's own `NO_PROXY` (e.g. your
+internal domain like `.internal.example.com`) so internal hosts bypass the proxy
+and only external API calls go through it.
+
+Press `Ctrl+C` in Terminal B to tear the gateway down; it removes its own
+`~/.ssh/config` alias and `~/.ssh/known_hosts` entry but never touches the
+ControlMaster — that belongs to whoever ran `onirika establish`.
+
+**Host key note.** Claude Code verifies the gateway's host key against
+`~/.ssh/known_hosts` directly — it ignores `StrictHostKeyChecking` /
+`UserKnownHostsFile` from ssh_config and has no trust-on-first-use prompt. The
+gateway therefore uses a *persistent* host key (`~/.local/share/onirika/host_key`)
+and registers it in `~/.ssh/known_hosts` on startup, removing it on teardown.
+This is why the alias works in Claude Code and not just from the terminal.
+
 ## Tool Reference
 
 ### Connection
