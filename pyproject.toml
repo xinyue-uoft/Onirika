@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "MCP server for remote SSH file and command operations via ControlMaster"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp[cli]>=1.2.0",
+    "mcp[cli]>=1.2.0,<2",  # 2.0 removed mcp.server.fastmcp
     "pyyaml>=6.0",
     "fastapi>=0.115",
     "websockets>=12.0",
