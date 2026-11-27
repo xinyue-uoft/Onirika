@@ -17,6 +17,8 @@ Usage:
   onirika setup                                        Interactive setup wizard
   onirika ssh [--config FILE]                          Run the MCP SSH server (stdio)
   onirika establish [<host>] [--config FILE]           Open the SSH master for <host> (or default_host)
+  onirika persist [<hostname>] [--interval N]          Ensure a persistent ControlMaster with keep-alive
+  onirika clean-up [--force]                           Remove stale sockets (--force: close onirika-ctrl-*)
   onirika proxy [<host>] [--establish] [--source PATH] Local SSH gateway on 127.0.0.1:4242 for Claude Code
   onirika proxy status                                 Show whether the gateway is running
   onirika proxy stop                                   Tear down the ~/.ssh/config gateway alias
@@ -355,6 +357,258 @@ def _run_gateway(host, alias: str, port: int, preamble: str = "") -> None:
         pass
 
 
+def _exec_persist(rest: list[str]) -> None:
+    """Reuse an existing ControlMaster or open a persistent one with keep-alive."""
+    from pathlib import Path
+
+    from onirika.control_master import (
+        DEFAULT_SERVER_ALIVE_COUNT_MAX,
+        DEFAULT_SERVER_ALIVE_INTERVAL,
+        persist_master,
+    )
+
+    hostname: str | None = None
+    config_path: Path | None = None
+    control_path: str | None = None
+    port: int | None = None
+    interval = DEFAULT_SERVER_ALIVE_INTERVAL
+    count_max = DEFAULT_SERVER_ALIVE_COUNT_MAX
+    quiet = False
+
+    def _parse_int(flag: str, raw: str) -> int:
+        try:
+            val = int(raw)
+        except ValueError:
+            print(f"onirika persist: {flag} requires an integer, got {raw!r}", file=sys.stderr)
+            sys.exit(2)
+        if val <= 0:
+            print(f"onirika persist: {flag} must be a positive integer", file=sys.stderr)
+            sys.exit(2)
+        return val
+
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ("--config", "-c"):
+            if i + 1 >= len(rest):
+                print("onirika persist: --config requires a path", file=sys.stderr)
+                sys.exit(2)
+            config_path = Path(rest[i + 1]).expanduser()
+            i += 2
+        elif a.startswith("--config="):
+            config_path = Path(a.split("=", 1)[1]).expanduser()
+            i += 1
+        elif a == "--interval":
+            if i + 1 >= len(rest):
+                print("onirika persist: --interval requires a number", file=sys.stderr)
+                sys.exit(2)
+            interval = _parse_int("--interval", rest[i + 1])
+            i += 2
+        elif a.startswith("--interval="):
+            interval = _parse_int("--interval", a.split("=", 1)[1])
+            i += 1
+        elif a == "--count-max":
+            if i + 1 >= len(rest):
+                print("onirika persist: --count-max requires a number", file=sys.stderr)
+                sys.exit(2)
+            count_max = _parse_int("--count-max", rest[i + 1])
+            i += 2
+        elif a.startswith("--count-max="):
+            count_max = _parse_int("--count-max", a.split("=", 1)[1])
+            i += 1
+        elif a in ("--control-path", "-S"):
+            if i + 1 >= len(rest):
+                print("onirika persist: --control-path requires a path", file=sys.stderr)
+                sys.exit(2)
+            control_path = rest[i + 1]
+            i += 2
+        elif a.startswith("--control-path="):
+            control_path = a.split("=", 1)[1]
+            i += 1
+        elif a in ("--port", "-p"):
+            if i + 1 >= len(rest):
+                print("onirika persist: --port requires a number", file=sys.stderr)
+                sys.exit(2)
+            port = _parse_int("--port", rest[i + 1])
+            i += 2
+        elif a.startswith("--port="):
+            port = _parse_int("--port", a.split("=", 1)[1])
+            i += 1
+        elif a in ("--quiet", "-q"):
+            quiet = True
+            i += 1
+        elif a in ("-h", "--help"):
+            print(
+                "Usage: onirika persist [<hostname>] [--interval N] [--count-max N]\n"
+                "                       [--control-path PATH] [--port N]\n"
+                "                       [--config FILE] [--quiet]\n"
+                "\n"
+                "Ensure a persistent SSH ControlMaster with keep-alive pulse is running.\n"
+                "Prefers reusing an existing live ControlMaster; creates a new background\n"
+                "master as fallback and prints the ControlMaster socket path to stdout.\n"
+                "\n"
+                "  <hostname>           Onirika host alias, ~/.ssh/config alias, or\n"
+                "                       [user@]hostname (defaults to config default_host)\n"
+                f"  --interval N         ServerAliveInterval in seconds (default: {DEFAULT_SERVER_ALIVE_INTERVAL})\n"
+                f"  --count-max N        ServerAliveCountMax missed pulses (default: {DEFAULT_SERVER_ALIVE_COUNT_MAX})\n"
+                "  -S, --control-path   Explicit ControlPath socket override\n"
+                "  -p, --port N         SSH port override\n"
+                "  -c, --config FILE    Onirika config path\n"
+                "  -q, --quiet          Only print the ControlMaster socket path"
+            )
+            return
+        elif a.startswith("-"):
+            print(f"onirika persist: unknown flag {a!r}", file=sys.stderr)
+            sys.exit(2)
+        else:
+            if hostname is not None:
+                print("onirika persist: only one hostname may be given", file=sys.stderr)
+                sys.exit(2)
+            hostname = a
+            i += 1
+
+    try:
+        result = persist_master(
+            hostname,
+            interval=interval,
+            count_max=count_max,
+            control_path=control_path,
+            port=port,
+            config_path=config_path,
+        )
+    except FileNotFoundError as e:
+        print(f"onirika persist: {e}", file=sys.stderr)
+        print("Run 'onirika setup' first, or pass a hostname directly.", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as e:
+        print(f"onirika persist: {e}", file=sys.stderr)
+        sys.exit(2)
+    except RuntimeError as e:
+        print(f"onirika persist: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not quiet:
+        if result.reused:
+            pid_info = f" (pid={result.pid})" if result.pid is not None else ""
+            print(
+                f"Reusing existing ControlMaster for {result.display_name}{pid_info}",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            pid_part = f"pid={result.pid}, " if result.pid is not None else ""
+            print(
+                f"Opened ControlMaster for {result.display_name} "
+                f"({pid_part}keep-alive every {result.interval}s x {result.count_max})",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    print(result.control_path)
+
+
+def _exec_cleanup(rest: list[str]) -> None:
+    """Remove stale sockets. With --force, close onirika-ctrl-* masters."""
+    from pathlib import Path
+
+    from onirika.control_master import ONIRIKA_SOCKET_PREFIX, cleanup_masters
+
+    force = False
+    config_path: Path | None = None
+
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ("--force", "-f"):
+            force = True
+            i += 1
+        elif a in ("--config", "-c"):
+            if i + 1 >= len(rest):
+                print("onirika clean-up: --config requires a path", file=sys.stderr)
+                sys.exit(2)
+            config_path = Path(rest[i + 1]).expanduser()
+            i += 2
+        elif a.startswith("--config="):
+            config_path = Path(a.split("=", 1)[1]).expanduser()
+            i += 1
+        elif a in ("-h", "--help"):
+            print(
+                "Usage: onirika clean-up [--force] [--config FILE]\n"
+                "\n"
+                "Remove stale Onirika ControlMaster sockets.\n"
+                "\n"
+                "  -f, --force         Also close live masters whose socket name\n"
+                "                      starts with onirika-ctrl-\n"
+                "  -c, --config FILE   Onirika config path"
+            )
+            return
+        elif a.startswith("-"):
+            print(f"onirika clean-up: unknown flag {a!r}", file=sys.stderr)
+            sys.exit(2)
+        else:
+            print(f"onirika clean-up: unexpected argument {a!r}", file=sys.stderr)
+            sys.exit(2)
+
+    try:
+        items = cleanup_masters(force=force, config_path=config_path)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"onirika clean-up: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not items:
+        print("No Onirika control masters found.")
+        return
+
+    removed_stale = 0
+    closed_active = 0
+    kept_active = 0
+    closable = False  # a kept socket that --force would close
+    failed = 0
+
+    for item in items:
+        pid_info = f" (pid={item.pid})" if item.pid is not None else ""
+        if item.status == "removed_stale":
+            removed_stale += 1
+            print(f"Removed stale ControlMaster: {item.control_path}")
+        elif item.status == "pruned_missing":
+            removed_stale += 1
+            print(f"Pruned missing ControlMaster entry: {item.control_path}")
+        elif item.status == "closed_active":
+            closed_active += 1
+            print(f"Closed active ControlMaster: {item.control_path}{pid_info}")
+        elif item.status == "kept_active":
+            kept_active += 1
+            if Path(item.control_path).name.startswith(ONIRIKA_SOCKET_PREFIX):
+                closable = True
+            print(f"Active ControlMaster left running: {item.control_path}{pid_info}")
+        else:
+            failed += 1
+            print(
+                f"Failed to clean up {item.control_path}: {item.detail}",
+                file=sys.stderr,
+            )
+
+    parts: list[str] = []
+    if removed_stale:
+        parts.append(f"{removed_stale} stale removed")
+    if closed_active:
+        parts.append(f"{closed_active} active closed")
+    if kept_active:
+        parts.append(f"{kept_active} active left running")
+    if failed:
+        parts.append(f"{failed} failed")
+    print(f"Summary: {', '.join(parts)}.")
+
+    if kept_active:
+        if force:
+            print("--force closes only sockets named onirika-ctrl-*.")
+        elif closable:
+            print("Use 'onirika clean-up --force' to close active onirika-ctrl-* masters.")
+
+    if failed:
+        sys.exit(1)
+
+
 def _exec_launcher(rest: list[str]) -> None:
     """Locate the bundled launcher shell script and exec it under bash.
 
@@ -393,6 +647,14 @@ def main() -> None:
 
     if cmd == "establish":
         _exec_establish(rest)
+        return
+
+    if cmd == "persist":
+        _exec_persist(rest)
+        return
+
+    if cmd in ("clean-up", "cleanup"):
+        _exec_cleanup(rest)
         return
 
     if cmd == "proxy":

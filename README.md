@@ -57,7 +57,7 @@ onirika launch <host-alias>       # tmux + SSH master + Claude Code (needs tmux)
 
 | Command | What it does |
 |---------|--------------|
-| `onirika` | Top-level dispatcher (`setup`, `ssh`, `launch`, `web`) |
+| `onirika` | Top-level dispatcher (`setup`, `ssh`, `establish`, `persist`, `clean-up`, `proxy`, `launch`, `web`) |
 | `onirika-ssh` | MCP server entry point (what Claude Code spawns) |
 | `onirika-setup` | Same wizard as `onirika setup` |
 | `onirika-web` | Same web UI as `onirika web` |
@@ -130,6 +130,31 @@ Or do all of the above in one shot with the tmux launcher:
 ```bash
 onirika launch myserver
 ```
+
+## Lightweight Persistent ControlMaster (`persist` & `clean-up`)
+
+If you just want a persistent background ControlMaster with a keep-alive pulse — without opening tmux, a web UI, or even running `onirika setup` first — use `onirika persist`:
+
+```bash
+# Works with a configured Onirika host alias, ~/.ssh/config alias, or [user@]hostname
+onirika persist myserver
+onirika persist user@server.example.com --interval 30 --count-max 3
+
+# Scriptable: stdout prints the ControlMaster socket path (reuse or newly opened)
+SOCK=$(onirika persist myserver)
+ssh -S "$SOCK" myserver uptime
+```
+
+`onirika persist` checks for an already-live ControlMaster first and reuses it. A socket recorded in Onirika's local registry is reused only if the host argument, SSH target, and port all match. If no socket can be reused, it removes any stale socket, opens a new background master (`ssh -M -f -N` with `ControlPersist=yes`, `ServerAliveInterval=60`, `ServerAliveCountMax=3`), records it in Onirika's local registry, and prints the socket path to stdout. It exits with an error if a socket that is not stale occupies the new socket path.
+
+To remove stale sockets or close Onirika's own masters:
+
+```bash
+onirika clean-up          # remove stale ControlMaster sockets
+onirika clean-up --force  # also close live masters named onirika-ctrl-*
+```
+
+A socket is stale only if a direct `connect()` to it is refused. `--force` leaves every other socket name running, including masters that `persist` opened at a configured or `--control-path` path.
 
 ## Local SSH Gateway (for Claude Code's native SSH)
 
